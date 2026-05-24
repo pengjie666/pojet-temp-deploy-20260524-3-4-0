@@ -38,17 +38,40 @@ import re
 p = Path('server.ts')
 s = p.read_text()
 
-s = s.replace(
-    'app.get("/api/signal-relay/receiver-manifest", receiverManifestAuthMiddleware, strictRateLimit, async (req: any, res) => {',
-    'app.get("/api/signal-relay/receiver-manifest", strictRateLimit, async (_req: any, res) => {'
-)
+public_manifest_route = '''
+  // Public receiver update manifest: the desktop receiver must be able to check updates
+  // even when the web dashboard login session has expired.
+  app.get("/api/signal-relay/receiver-manifest", strictRateLimit, async (_req: any, res) => {
+    try {
+      const manifest = await buildReceiverManifest();
+      if (!manifest) {
+        return res.status(404).json({
+          error: "receiver_package_not_found",
+          message: "Receiver package has not been generated.",
+        });
+      }
+      res.setHeader("Cache-Control", "no-store");
+      res.json(manifest);
+    } catch (err) {
+      res.status(500).json({
+        error: "receiver_manifest_error",
+        message: "receiver manifest failed",
+      });
+    }
+  });
 
-s = re.sub(
-    r'try \{\s*if \(!\(await hasSignalPackageAccess\(req\.user\)\)\) \{\s*return res\.status\(403\)\.json\(\{\s*error: "receiver_manifest_membership_required",[\s\S]*?\}\);\s*\}\s*const manifest',
-    'try {\n      const manifest',
-    s,
-    count=1,
-)
+'''
+
+if 'Public receiver update manifest' not in s:
+    marker = '  const receiverManifestAuthMiddleware = (req: any, res: any, next: any) =>'
+    if marker in s:
+        s = s.replace(marker, public_manifest_route + marker, 1)
+    else:
+        marker = '  app.get("/api/signal-relay/receiver-manifest"'
+        idx = s.find(marker)
+        if idx == -1:
+            raise SystemExit('receiver manifest route marker not found')
+        s = s[:idx] + public_manifest_route + s[idx:]
 
 start = s.find('const sendReceiverClientPackage')
 if start != -1:
@@ -82,12 +105,12 @@ echo "=== container status ==="
 sudo docker compose ps
 
 echo "=== local receiver manifest check ==="
-curl -sS -i http://127.0.0.1/api/signal-relay/receiver-manifest | head -100 || true
+curl -sS -i http://127.0.0.1/api/signal-relay/receiver-manifest | head -120 || true
 
 echo "=== local receiver package head ==="
 curl -sS -I http://127.0.0.1/api/signal-relay/receiver-package | head -40 || true
 
 echo "=== public receiver manifest check ==="
-curl -sS -i https://www.pojetcapital.com/api/signal-relay/receiver-manifest | head -100 || true
+curl -sS -i https://www.pojetcapital.com/api/signal-relay/receiver-manifest | head -120 || true
 
 echo "=== deploy hotfix done ==="
